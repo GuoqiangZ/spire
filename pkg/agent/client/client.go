@@ -63,6 +63,8 @@ type Config struct {
 
 	// RotMtx is used to prevent the creation of new connections during SVID rotations
 	RotMtx *sync.RWMutex
+
+	Metrics telemetry.Metrics
 }
 
 type client struct {
@@ -301,6 +303,7 @@ func (c *client) dial(ctx context.Context) (*grpc.ClientConn, error) {
 			return agentCert
 		},
 		dialContext: c.dialContext,
+		Metrics:     c.c.Metrics,
 	})
 }
 

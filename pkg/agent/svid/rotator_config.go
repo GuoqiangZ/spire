@@ -77,6 +77,7 @@ func newRotator(c *RotatorConfig) (*rotator, client.Client) {
 			}
 			return s.SVID, s.Key, rootCAs
 		},
+		Metrics: c.Metrics,
 	}
 	client := client.New(cfg)
 

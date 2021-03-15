@@ -279,6 +279,7 @@ func (a *attestor) serverConn(ctx context.Context, bundle *bundleutil.Bundle) (*
 			Address:     a.c.ServerAddress,
 			TrustDomain: a.c.TrustDomain,
 			GetBundle:   bundle.RootCAs,
+			Metrics:     a.c.Metrics,
 		})
 	}
 

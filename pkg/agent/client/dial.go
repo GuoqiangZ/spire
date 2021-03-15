@@ -7,6 +7,9 @@ import (
 	"crypto/x509"
 	"errors"
 	"fmt"
+	"github.com/spiffe/spire/pkg/common/telemetry"
+	"net"
+	"strings"
 	"time"
 
 	"github.com/spiffe/go-spiffe/v2/bundle/x509bundle"
@@ -38,6 +41,8 @@ type DialServerConfig struct {
 	// certificate to present to the server during the TLS handshake.
 	GetAgentCertificate func() *tls.Certificate
 
+	Metrics telemetry.Metrics
+
 	// dialContext is an optional constructor for the grpc client connection.
 	dialContext func(ctx context.Context, target string, opts ...grpc.DialOption) (*grpc.ClientConn, error)
 }
@@ -60,15 +65,19 @@ func DialServer(ctx context.Context, config DialServerConfig) (*grpc.ClientConn,
 	if config.dialContext == nil {
 		config.dialContext = grpc.DialContext
 	}
+	t1 := time.Now()
 	client, err := config.dialContext(ctx, config.Address,
 		grpc.WithBalancerName(roundrobin.Name), //nolint:staticcheck
 		grpc.FailOnNonTempDialError(true),
 		grpc.WithBlock(),
 		grpc.WithReturnConnectionError(),
 		grpc.WithTransportCredentials(credentials.NewTLS(tlsConfig)),
+		grpc.WithUnaryInterceptor(unaryInterceptor(config.Metrics)),
+		grpc.WithContextDialer(grpcDialer(config.Metrics)),
 	)
 	switch {
 	case err == nil:
+		config.Metrics.MeasureSince([]string{"runtime", "dial_grpc"}, t1)
 	case errors.Is(err, context.Canceled):
 		return nil, fmt.Errorf("failed to dial %s: canceled", config.Address)
 	case errors.Is(err, context.DeadlineExceeded):
@@ -77,6 +86,26 @@ func DialServer(ctx context.Context, config DialServerConfig) (*grpc.ClientConn,
 		return nil, fmt.Errorf("failed to dial %s: %v", config.Address, err)
 	}
 	return client, nil
+}
+
+func grpcDialer(metrics telemetry.Metrics) func(context.Context, string) (net.Conn, error) {
+	return func(ctx context.Context, address string) (net.Conn, error) {
+		t1 := time.Now()
+		defer metrics.MeasureSince([]string{"runtime", "dial_tcp"}, t1)
+		dialer := net.Dialer{}
+		return dialer.DialContext(ctx, "tcp", address)
+	}
+}
+
+func unaryInterceptor(metrics telemetry.Metrics) grpc.UnaryClientInterceptor {
+	return func(ctx context.Context, method string, req, reply interface{}, cc *grpc.ClientConn, invoker grpc.UnaryInvoker, opts ...grpc.CallOption) error {
+		t1 := time.Now()
+		err := invoker(ctx, method, req, reply, cc, opts...)
+		methodSplit := strings.Split(method, "/")
+		cc.Target()
+		metrics.MeasureSince([]string{"runtime", "grpc", "unary_call", methodSplit[len(methodSplit)-1]}, t1)
+		return err
+	}
 }
 
 type bundleSource struct {
